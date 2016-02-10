@@ -54,13 +54,13 @@ module Data.IntMap (
 
   ) where
 
-import           Data.Foldable        (Foldable, foldMap, foldl)
-import           Data.IntMap.Internal
-import           Data.Maybe
-import           Data.Monoid
-import           Data.Traversable     (Traversable)
-import           Data.Tuple           (Tuple (Tuple))
-import           Prelude
+import Data.Foldable (class Foldable, foldMap, foldl)
+import Data.IntMap.Internal (Prefix, Mask(Mask), mask, branchLeft, branchingBit', prefixAsKey, matchPrefix, maskLonger)
+import Data.Maybe (Maybe(Nothing, Just))
+import Data.Monoid (class Monoid, mempty)
+import Data.Traversable (class Traversable)
+import Data.Tuple (Tuple (Tuple))
+import Prelude (class Applicative, class Eq, class Functor, class Semigroup, (<*>), (<$>), pure, (+), (<>), otherwise, (&&), (==), not, ($), eq, id, append)
 
 -- Type definition (not exported)
 -- ----------------------------------------------------------------------------
@@ -173,16 +173,17 @@ insertWithKey splat k a t = go t where
 -- | /O(min(n,W))/. Delete a key and its value from map. When the key is not
 -- | a member of the map, the original map is returned.
 delete :: forall a. Int -> IntMap a -> IntMap a
-delete k t =
-  case t of
-    Empty -> Empty
-    Lf ky _
-      | k==ky -> Empty
-      | otherwise -> t
-    Br p m l r
-      | not (matchPrefix p m k) -> t
-      | branchLeft m k -> Br p m (delete k l) r
-      | otherwise -> Br p m l (delete k r)
+delete k t = go t where
+  go t =
+    case t of
+      Empty -> Empty
+      Lf ky _
+        | k==ky -> Empty
+        | otherwise -> t
+      Br p m l r
+        | not (matchPrefix p m k) -> t
+        | branchLeft m k -> br p m (go l) r
+        | otherwise -> br p m l (go r)
 
 -- | /O(min(n,W))/. Adjust a value at a specific key. When the key is not
 -- | a member of the map, the original map is returned.
@@ -216,8 +217,8 @@ updateWithKey f k t = go t where
         | otherwise -> t
       Br p m l r
         | not (matchPrefix p m k) -> t
-        | branchLeft m k -> Br p m (go l) r
-        | otherwise -> Br p m l (go r)
+        | branchLeft m k -> br p m (go l) r
+        | otherwise -> br p m l (go r)
 
 -- | Unions two `IntMap`s together using a splatting function. If 
 -- | a key is present in both constituent lists then the resulting 
