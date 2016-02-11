@@ -41,6 +41,15 @@ module Data.IntMap (
   , unionRight
   , unionWithKey
 
+  , difference
+  , differenceWith
+  , differenceWithKey
+
+  , intersectionLeft
+  , intersectionRight
+  , intersectionWith
+  , intersectionWithKey
+
   , mapWithKey
   , foldMapWithKey
   , foldlWithKey
@@ -271,6 +280,37 @@ unionWithKey splat = go where
         (prefixAsKey l_p) l_m l
         (prefixAsKey r_p) r_m r
 
+-- | /O(n+m)/. Difference between two maps (based on keys).
+difference :: forall a b. IntMap a -> IntMap b -> IntMap a
+difference m1 m2 = mergeWithKey (\_ _ _ -> Nothing) id (const Empty) m1 m2
+
+-- | /O(n+m)/. Difference with a combining function.
+differenceWith :: forall a b. (a -> b -> Maybe a) -> IntMap a -> IntMap b -> IntMap a
+differenceWith f m1 m2 = differenceWithKey (\_ x y -> f x y) m1 m2
+
+-- | /O(n+m)/. Difference with a combining function. When two equal keys are
+-- encountered, the combining function is applied to the key and both values.
+-- If it returns 'Nothing', the element is discarded (proper set difference).
+-- If it returns (@'Just' y@), the element is updated with a new value @y@.
+differenceWithKey :: forall a b. (Int -> a -> b -> Maybe a) -> IntMap a -> IntMap b -> IntMap a
+differenceWithKey f m1 m2 = mergeWithKey f id (const Empty) m1 m2
+
+-- | /O(n+m)/. The (left-biased) intersection of two maps (based on keys).
+intersectionLeft :: forall a b. IntMap a -> IntMap b -> IntMap a
+intersectionLeft m1 m2 = mergeWithKey' br const (const Empty) (const Empty) m1 m2
+
+-- | /O(n+m)/. The (right-biased) intersection of two maps (based on keys).
+intersectionRight :: forall a b. IntMap a -> IntMap b -> IntMap b
+intersectionRight m1 m2 = mergeWithKey' br (flip const) (const Empty) (const Empty) m1 m2
+
+-- | /O(n+m)/. The intersection with a combining function.
+intersectionWith :: forall a b c. (a -> b -> c) -> IntMap a -> IntMap b -> IntMap c
+intersectionWith f m1 m2 = intersectionWithKey (\_ x y -> f x y) m1 m2
+
+-- | /O(n+m)/. The intersection with a combining function.
+intersectionWithKey :: forall a b c. (Int -> a -> b -> c) -> IntMap a -> IntMap b -> IntMap c
+intersectionWithKey f m1 m2 = mergeWithKey' br (\(Lf k1 x1) (Lf _ x2) -> Lf k1 (f k1 x1 x2)) (const Empty) (const Empty) m1 m2
+
 -- | Transform all of the values in the map.
 mapWithKey :: forall a b . (Int -> a -> b) -> IntMap a -> IntMap b
 mapWithKey f = go where
@@ -357,6 +397,54 @@ join k1 m1 t1 k2 m2 t2 =
    in if branchLeft m k1
          then Br (mask m k1) m t1 t2
          else Br (mask m k1) m t2 t1
+
+-- | /O(n+m)/. A high-performance universal combining function. Using
+-- 'mergeWithKey', all combining functions can be defined without any loss of
+-- efficiency (with exception of 'union', 'difference' and 'intersection',
+-- where sharing of some nodes is lost with 'mergeWithKey').
+--
+-- Please make sure you know what is going on when using 'mergeWithKey',
+-- otherwise you can be surprised by unexpected code growth or even
+-- corruption of the data structure.
+--
+-- When 'mergeWithKey' is given three arguments, it is inlined to the call
+-- site. You should therefore use 'mergeWithKey' only to define your custom
+-- combining functions. For example, you could define 'unionWithKey',
+-- 'differenceWithKey' and 'intersectionWithKey' as
+--
+-- > myUnionWithKey f m1 m2 = mergeWithKey (\k x1 x2 -> Just (f k x1 x2)) id id m1 m2
+-- > myDifferenceWithKey f m1 m2 = mergeWithKey f id (const empty) m1 m2
+-- > myIntersectionWithKey f m1 m2 = mergeWithKey (\k x1 x2 -> Just (f k x1 x2)) (const empty) (const empty) m1 m2
+--
+-- When calling @'mergeWithKey' combine only1 only2@, a function combining two
+-- 'IntMap's is created, such that
+--
+-- * if a key is present in both maps, it is passed with both corresponding
+--   values to the @combine@ function. Depending on the result, the key is either
+--   present in the result with specified value, or is left out;
+--
+-- * a nonempty subtree present only in the first map is passed to @only1@ and
+--   the output is added to the result;
+--
+-- * a nonempty subtree present only in the second map is passed to @only2@ and
+--   the output is added to the result.
+--
+-- The @only1@ and @only2@ methods /must return a map with a subset (possibly empty) of the keys of the given map/.
+-- The values can be modified arbitrarily. Most common variants of @only1@ and
+-- @only2@ are 'id' and @'const' 'empty'@, but for example @'map' f@ or
+-- @'filterWithKey' f@ could be used for any @f@.
+
+mergeWithKey :: forall a b c. (Int -> a -> b -> Maybe c) -> (IntMap a -> IntMap c) -> (IntMap b -> IntMap c)
+             -> IntMap a -> IntMap b -> IntMap c
+mergeWithKey f g1 g2 = mergeWithKey' br combine g1 g2
+  where
+    combine (Lf k1 x1) (Lf _k2 x2) =
+      case f k1 x1 x2 of
+        Nothing -> Empty
+        Just x  -> Lf k1 x
+    combine _ _ =
+      -- should never reach here!
+      Empty
 
 -- Slightly more general version of mergeWithKey. It differs in the following:
 --
